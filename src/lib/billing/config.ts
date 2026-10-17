@@ -14,7 +14,7 @@ export const BILLING_PLANS: Record<BillingPlanId, BillingPlan> = {
     id: 'month',
     title: '1 месяц',
     description: 'Доступ к MySimpleEnglish на 1 месяц',
-    amount: 1,
+    amount: 999,
     durationMonths: 1,
     IS_RECCCURENT: false,
   },
