@@ -6,36 +6,67 @@ if (!verifySessionToken(Astro.cookies.get(ADMIN_COOKIE)?.value)) {
   return Astro.redirect('/admin/login');
 }
 
-const directusUrl = import.meta.env.PUBLIC_DIRECTUS_URL;
-const token = process.env.DIRECTUS_SERVICE_TOKEN;
+const directusUrl = (
+  process.env.DIRECTUS_URL ||
+  process.env.PUBLIC_DIRECTUS_URL ||
+  'https://api.my-simple-english.ru'
+).replace(/\/+$/, '');
+const headers = {
+  Authorization: `Bearer ${process.env.DIRECTUS_SERVICE_TOKEN?.trim()}`,
+};
 
-type Row = { email: string; plan?: string; status?: string; date?: string };
-let rows: Row[] = [];
+type Row = { email: string; expiredAt: Date; active: boolean; recurring: boolean };
+const rows: Row[] = [];
 let loadError = '';
 
 try {
-  const params = new URLSearchParams({
-    'fields': 'id,status,plan,date_created,user.email',
-    'filter[status][_eq]': 'active',   // ← поправьте под ваше значение статуса
-    'sort': '-date_created',
-    'limit': '-1',
+  // оплаченные = у которых проставлен expired_at (его ставит вебхук/сверка)
+  const subsParams = new URLSearchParams({
+    'filter[expired_at][_nnull]': 'true',
+    fields: 'id,user_id,expired_at,is_prologation',
+    sort: '-expired_at',
+    limit: '-1',
   });
-  const res = await fetch(`${directusUrl}/items/subscriptions?${params}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(`Directus ${res.status}`);
-  const { data } = await res.json();
+  const subsRes = await fetch(`${directusUrl}/items/subscriptions?${subsParams}`, { headers });
+  if (!subsRes.ok) throw new Error(`Directus subscriptions ${subsRes.status}`);
+  const subs: Array<{ user_id: string; expired_at: string; is_prologation: boolean }> =
+    (await subsRes.json()).data ?? [];
 
-  const seen = new Set<string>();
-  for (const s of data ?? []) {
-    const email = s.user?.email;
-    if (!email || seen.has(email)) continue;
-    seen.add(email);
-    rows.push({ email, plan: s.plan, status: s.status, date: s.date_created });
+  // одна (самая поздняя) подписка на пользователя
+  const latest = new Map<string, (typeof subs)[number]>();
+  for (const s of subs) if (!latest.has(s.user_id)) latest.set(s.user_id, s);
+
+  // email берём из directus_users пачками
+  const ids = [...latest.keys()];
+  const emails = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const p = new URLSearchParams({
+      'filter[id][_in]': chunk.join(','),
+      fields: 'id,email',
+      limit: '-1',
+    });
+    const r = await fetch(`${directusUrl}/users?${p}`, { headers });
+    if (!r.ok) throw new Error(`Directus users ${r.status}`);
+    for (const u of (await r.json()).data ?? []) emails.set(u.id, u.email);
+  }
+
+  for (const [userId, s] of latest) {
+    const email = emails.get(userId);
+    if (!email) continue;
+    const expiredAt = new Date(s.expired_at);
+    rows.push({
+      email,
+      expiredAt,
+      active: expiredAt > new Date(),
+      recurring: !!s.is_prologation,
+    });
   }
 } catch (e) {
   loadError = e instanceof Error ? e.message : 'Ошибка загрузки';
 }
+
+const activeCount = rows.filter((r) => r.active).length;
 ---
 <!doctype html>
 <html lang="ru">
@@ -45,31 +76,33 @@ try {
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Админка — подписчики</title>
     <style>
-      body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}
+      body{font-family:system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem}
       header{display:flex;justify-content:space-between;align-items:center}
       table{width:100%;border-collapse:collapse;margin-top:1rem}
       th,td{text-align:left;padding:8px;border-bottom:1px solid #e5e5e5}
       button{padding:8px 14px;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer}
-      .err{color:#c00}
+      .err{color:#c00}.ok{color:#080}.off{color:#888}
     </style>
   </head>
   <body>
     <header>
-      <h1>Оплатившие подписку ({rows.length})</h1>
+      <h1>Оплатили подписку: {rows.length} (активных: {activeCount})</h1>
       <form method="POST" action="/api/admin/logout"><button>Выйти</button></form>
     </header>
 
     {loadError && <p class="err">Не удалось загрузить данные: {loadError}</p>}
 
     <table>
-      <thead><tr><th>#</th><th>Email</th><th>План</th><th>Дата</th></tr></thead>
+      <thead><tr><th>#</th><th>Email</th><th>Статус</th><th>Действует до</th></tr></thead>
       <tbody>
         {rows.map((r, i) => (
           <tr>
             <td>{i + 1}</td>
             <td>{r.email}</td>
-            <td>{r.plan ?? '—'}</td>
-            <td>{r.date ? new Date(r.date).toLocaleDateString('ru-RU') : '—'}</td>
+            <td class={r.active ? 'ok' : 'off'}>
+              {r.active ? 'активна' : 'истекла'}{r.recurring ? ' (автопродление)' : ''}
+            </td>
+            <td>{r.expiredAt.toLocaleDateString('ru-RU')}</td>
           </tr>
         ))}
       </tbody>
