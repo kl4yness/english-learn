@@ -1,0 +1,78 @@
+---
+export const prerender = false;
+import { ADMIN_COOKIE, verifySessionToken } from '../../lib/admin/auth';
+
+if (!verifySessionToken(Astro.cookies.get(ADMIN_COOKIE)?.value)) {
+  return Astro.redirect('/admin/login');
+}
+
+const directusUrl = import.meta.env.PUBLIC_DIRECTUS_URL;
+const token = process.env.DIRECTUS_SERVICE_TOKEN;
+
+type Row = { email: string; plan?: string; status?: string; date?: string };
+let rows: Row[] = [];
+let loadError = '';
+
+try {
+  const params = new URLSearchParams({
+    'fields': 'id,status,plan,date_created,user.email',
+    'filter[status][_eq]': 'active',   // ← поправьте под ваше значение статуса
+    'sort': '-date_created',
+    'limit': '-1',
+  });
+  const res = await fetch(`${directusUrl}/items/subscriptions?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Directus ${res.status}`);
+  const { data } = await res.json();
+
+  const seen = new Set<string>();
+  for (const s of data ?? []) {
+    const email = s.user?.email;
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    rows.push({ email, plan: s.plan, status: s.status, date: s.date_created });
+  }
+} catch (e) {
+  loadError = e instanceof Error ? e.message : 'Ошибка загрузки';
+}
+---
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Админка — подписчики</title>
+    <style>
+      body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}
+      header{display:flex;justify-content:space-between;align-items:center}
+      table{width:100%;border-collapse:collapse;margin-top:1rem}
+      th,td{text-align:left;padding:8px;border-bottom:1px solid #e5e5e5}
+      button{padding:8px 14px;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer}
+      .err{color:#c00}
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Оплатившие подписку ({rows.length})</h1>
+      <form method="POST" action="/api/admin/logout"><button>Выйти</button></form>
+    </header>
+
+    {loadError && <p class="err">Не удалось загрузить данные: {loadError}</p>}
+
+    <table>
+      <thead><tr><th>#</th><th>Email</th><th>План</th><th>Дата</th></tr></thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr>
+            <td>{i + 1}</td>
+            <td>{r.email}</td>
+            <td>{r.plan ?? '—'}</td>
+            <td>{r.date ? new Date(r.date).toLocaleDateString('ru-RU') : '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </body>
+</html>
