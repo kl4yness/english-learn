@@ -1,0 +1,35 @@
+---
+export const prerender = false;
+import { ADMIN_COOKIE, verifySessionToken } from '../../lib/admin/auth';
+
+if (verifySessionToken(Astro.cookies.get(ADMIN_COOKIE)?.value)) {
+  return Astro.redirect('/admin');
+}
+const error = Astro.url.searchParams.get('error');
+---
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Вход — админка</title>
+    <style>
+      body{font-family:system-ui,sans-serif;background:#f4f4f5;display:grid;place-items:center;min-height:100vh;margin:0}
+      form{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 2px 12px #0001;width:320px;display:grid;gap:12px}
+      input,button{padding:10px;border-radius:8px;border:1px solid #ccc;font-size:16px}
+      button{background:#111;color:#fff;border:0;cursor:pointer}
+      .err{color:#c00;font-size:14px}
+    </style>
+  </head>
+  <body>
+    <form method="POST" action="/api/admin/login">
+      <h1 style="margin:0;font-size:20px">Админка</h1>
+      {error === 'locked' && <div class="err">Слишком много попыток. Подождите 15 минут.</div>}
+      {error === '1' && <div class="err">Неверный логин или пароль</div>}
+      <input name="login" placeholder="Логин" autocomplete="username" required />
+      <input name="password" type="password" placeholder="Пароль" autocomplete="current-password" required />
+      <button type="submit">Войти</button>
+    </form>
+  </body>
+</html>
